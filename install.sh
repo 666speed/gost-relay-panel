@@ -94,7 +94,9 @@ install -m 0755 "$tmp_dir/gost" "$GOST_BIN"
 
 script_dir=""
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
-    script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+    if ! script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"; then
+        script_dir=""
+    fi
 fi
 
 install_project_file() {
