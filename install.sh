@@ -7,10 +7,12 @@ readonly PROJECT_REPO="${GOST_SNI_REPO:-666speed/gost-sni-forward}"
 readonly PROJECT_REF="${GOST_SNI_REF:-main}"
 readonly RAW_BASE="https://raw.githubusercontent.com/${PROJECT_REPO}/${PROJECT_REF}"
 readonly INSTALL_ROOT="/usr/local/lib/gost-sni-forward"
-readonly MANAGER_BIN="/usr/local/sbin/gost-sni"
-readonly GOST_BIN="/usr/local/bin/gost"
+readonly MANAGER_BIN="/usr/local/bin/gost"
+readonly COMPAT_MANAGER_BIN="/usr/local/sbin/gost-sni"
+readonly CORE_BIN="$INSTALL_ROOT/gost-core"
 readonly STATE_DIR="/etc/gost-sni-forward"
 readonly UNIT_FILE="/etc/systemd/system/gost-sni-forward.service"
+readonly GOST_TAG="${GOST_SNI_GOST_VERSION:-v3.2.6}"
 
 NO_MENU=false
 FORCE_OS=false
@@ -47,7 +49,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl tar >/dev/null
+apt-get install -y -qq ca-certificates curl tar iproute2 util-linux >/dev/null
 
 case "$(uname -m)" in
     x86_64) asset_arch="amd64" ;;
@@ -61,18 +63,15 @@ tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf -- "$tmp_dir"; }
 trap cleanup EXIT
 
-printf '正在获取 gost 最新稳定版本...\n'
-release_json="$(curl -fsSL --retry 3 https://api.github.com/repos/go-gost/gost/releases/latest)"
-gost_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$release_json" | head -n1)"
-if [[ ! "$gost_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    printf '错误：无法解析 gost 最新版本。\n' >&2
+if [[ ! "$GOST_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf '错误：无效的 gost 版本号：%s。\n' "$GOST_TAG" >&2
     exit 1
 fi
-gost_version="${gost_tag#v}"
+gost_version="${GOST_TAG#v}"
 asset="gost_${gost_version}_linux_${asset_arch}.tar.gz"
-release_base="https://github.com/go-gost/gost/releases/download/${gost_tag}"
+release_base="https://github.com/go-gost/gost/releases/download/${GOST_TAG}"
 
-printf '正在下载 gost %s (%s)...\n' "$gost_tag" "$asset_arch"
+printf '正在下载已严格测试的 gost %s (%s)...\n' "$GOST_TAG" "$asset_arch"
 curl -fL --retry 3 -o "$tmp_dir/$asset" "$release_base/$asset"
 curl -fL --retry 3 -o "$tmp_dir/checksums.txt" "$release_base/checksums.txt"
 expected_sum="$(awk -v file="$asset" '$2 == file || $2 == "*" file {print $1; exit}' "$tmp_dir/checksums.txt")"
@@ -83,14 +82,22 @@ if [[ -z "$expected_sum" || "$expected_sum" != "$actual_sum" ]]; then
 fi
 tar -xzf "$tmp_dir/$asset" -C "$tmp_dir" gost
 
-install -d -m 0755 "$INSTALL_ROOT" "$STATE_DIR"
-if [[ -x "$GOST_BIN" && ! -e "$INSTALL_ROOT/original-gost.path" ]]; then
-    backup_path="${GOST_BIN}.before-gost-sni.$(date +%Y%m%d%H%M%S)"
-    cp -a -- "$GOST_BIN" "$backup_path"
-    printf '%s\n' "$backup_path" > "$INSTALL_ROOT/original-gost.path"
-    printf '已备份原有 gost 到 %s\n' "$backup_path"
+install -d -m 0755 "$INSTALL_ROOT" "$STATE_DIR" "$(dirname "$MANAGER_BIN")" "$(dirname "$COMPAT_MANAGER_BIN")"
+if [[ ! -e "$INSTALL_ROOT/original-gost.path" && ! -e "$INSTALL_ROOT/no-original-gost" ]]; then
+    if [[ -x "$COMPAT_MANAGER_BIN" && -f "$UNIT_FILE" && -x "$MANAGER_BIN" ]]; then
+        # Migration from an earlier gost-sni-forward release: /usr/local/bin/gost
+        # is this project's old core binary, not a user-owned executable.
+        : > "$INSTALL_ROOT/no-original-gost"
+    elif [[ -x "$MANAGER_BIN" ]]; then
+        backup_path="${MANAGER_BIN}.before-gost-sni.$(date +%Y%m%d%H%M%S)"
+        cp -a -- "$MANAGER_BIN" "$backup_path"
+        printf '%s\n' "$backup_path" > "$INSTALL_ROOT/original-gost.path"
+        printf '已备份原有 gost 到 %s\n' "$backup_path"
+    else
+        : > "$INSTALL_ROOT/no-original-gost"
+    fi
 fi
-install -m 0755 "$tmp_dir/gost" "$GOST_BIN"
+install -m 0755 "$tmp_dir/gost" "$CORE_BIN"
 
 script_dir=""
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
@@ -112,6 +119,7 @@ install_project_file() {
 install_project_file manager/gost-sni  "$MANAGER_BIN" 0755
 install_project_file systemd/gost-sni-forward.service "$UNIT_FILE" 0644
 install_project_file install.sh "$INSTALL_ROOT/install.sh" 0644
+ln -sfn "$MANAGER_BIN" "$COMPAT_MANAGER_BIN"
 
 touch "$STATE_DIR/domains.txt" "$STATE_DIR/forwards.tsv"
 chmod 0600 "$STATE_DIR/domains.txt" "$STATE_DIR/forwards.tsv"
@@ -119,10 +127,10 @@ chmod 0600 "$STATE_DIR/domains.txt" "$STATE_DIR/forwards.tsv"
 "$MANAGER_BIN" init
 systemctl daemon-reload
 
-printf '\n安装完成：gost %s\n' "$gost_tag"
-printf '管理菜单：sudo gost-sni\n'
+printf '\n安装完成：gost 核心 %s\n' "$GOST_TAG"
+printf '管理菜单：直接输入 gost（普通 sudo 用户会自动提权）\n'
 printf '配置目录：%s\n' "$STATE_DIR"
-printf '请先在菜单中添加主域名和 IP 转发，服务随后会自动启动。\n'
+printf '请先在菜单中添加主域名和 TCP IPv4 转发，服务随后会自动启动。\n'
 
 if [[ "$NO_MENU" != true && -t 0 && -t 1 ]]; then
     exec "$MANAGER_BIN" menu

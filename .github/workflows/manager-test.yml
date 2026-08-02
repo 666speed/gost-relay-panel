@@ -21,8 +21,47 @@ jobs:
         run: bash tests/test_sni_integration.sh
       - name: Smoke-test Ubuntu installer and systemd unit
         run: |
-          sudo bash install.sh --no-menu
-          sudo gost-sni domain add example.com
-          sudo gost-sni forward add 19445 127.0.0.1 443 smoke-test
+          sudo env GOST_SNI_REF="$GITHUB_SHA" bash -c \
+            'bash <(curl -fsSL "https://raw.githubusercontent.com/666speed/gost-sni-forward/${GOST_SNI_REF}/install.sh") --no-menu'
+          systemd-analyze verify /etc/systemd/system/gost-sni-forward.service
+          test "$(command -v gost)" = "/usr/local/bin/gost"
+          sudo test -x /usr/local/lib/gost-sni-forward/gost-core
+          sudo /usr/local/lib/gost-sni-forward/gost-core -V | grep -F '3.2.6'
+          gost domain add example.com
+          gost forward add 19445 127.0.0.1 443 smoke-one
+          gost forward add 19446 127.0.0.1 444 smoke-two
+          systemctl is-enabled --quiet gost-sni-forward.service
           systemctl is-active --quiet gost-sni-forward.service
-          sudo gost-sni status
+          test "$(systemctl show gost-sni-forward.service -p Restart --value)" = "always"
+          test "$(stat -c '%a' /etc/gost-sni-forward/domains.txt)" = "600"
+          test "$(stat -c '%a' /etc/gost-sni-forward/forwards.tsv)" = "600"
+          test "$(stat -c '%a' /etc/gost-sni-forward/gost.yml)" = "644"
+          ss -ltnH 'sport = :19445' | grep -q .
+          ss -ltnH 'sport = :19446' | grep -q .
+          test -z "$(ss -lunH 'sport = :19445')"
+          test -z "$(ss -lunH 'sport = :19446')"
+          test -z "$(ss -ltn6H 'sport = :19445')"
+          test -z "$(ss -ltn6H 'sport = :19446')"
+
+          old_pid="$(systemctl show gost-sni-forward.service -p MainPID --value)"
+          sudo kill -9 "$old_pid"
+          for _ in {1..20}; do
+            sleep 1
+            new_pid="$(systemctl show gost-sni-forward.service -p MainPID --value)"
+            if systemctl is-active --quiet gost-sni-forward.service && \
+               [ "$new_pid" -gt 0 ] && [ "$new_pid" != "$old_pid" ]; then
+              break
+            fi
+          done
+          systemctl is-active --quiet gost-sni-forward.service
+          test "$new_pid" != "$old_pid"
+          test "$(ps -o user= -p "$new_pid" | xargs)" = "nobody"
+          test "$(systemctl show gost-sni-forward.service -p NRestarts --value)" -ge 1
+
+          config_sum="$(sha256sum /etc/gost-sni-forward/gost.yml | awk '{print $1}')"
+          sudo bash install.sh --no-menu
+          systemctl is-enabled --quiet gost-sni-forward.service
+          systemctl is-active --quiet gost-sni-forward.service
+          test "$(sha256sum /etc/gost-sni-forward/gost.yml | awk '{print $1}')" = "$config_sum"
+          test "$(readlink -f /usr/local/sbin/gost-sni)" = "/usr/local/bin/gost"
+          gost status
