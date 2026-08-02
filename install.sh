@@ -118,11 +118,11 @@ chmod 0600 "$STATE_DIR/domains.txt" "$STATE_DIR/forwards.tsv"
 
 "$MANAGER_BIN" init
 systemctl daemon-reload
-systemctl enable --now gost-sni-forward.service >/dev/null
 
 printf '\n安装完成：gost %s\n' "$gost_tag"
 printf '管理菜单：sudo gost-sni\n'
 printf '配置目录：%s\n' "$STATE_DIR"
+printf '请先在菜单中添加主域名和 IP 转发，服务随后会自动启动。\n'
 
 if [[ "$NO_MENU" != true && -t 0 && -t 1 ]]; then
     exec "$MANAGER_BIN" menu

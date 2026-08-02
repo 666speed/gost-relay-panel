@@ -22,5 +22,7 @@ jobs:
       - name: Smoke-test Ubuntu installer and systemd unit
         run: |
           sudo bash install.sh --no-menu
+          sudo gost-sni domain add example.com
+          sudo gost-sni forward add 19445 127.0.0.1 443 smoke-test
           systemctl is-active --quiet gost-sni-forward.service
           sudo gost-sni status

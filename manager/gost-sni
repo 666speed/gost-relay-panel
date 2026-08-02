@@ -116,11 +116,19 @@ systemctl_available() {
     [[ "${GOST_SNI_SKIP_SYSTEMD:-0}" != 1 ]] && command -v systemctl >/dev/null 2>&1
 }
 
+config_ready() {
+    [[ -s "$DOMAINS_FILE" && -s "$FORWARDS_FILE" ]]
+}
+
 apply_service() {
     if systemctl_available; then
         systemctl daemon-reload
-        systemctl enable "$SERVICE_NAME" >/dev/null
-        systemctl reload-or-restart "$SERVICE_NAME"
+        if config_ready; then
+            systemctl enable "$SERVICE_NAME" >/dev/null
+            systemctl reload-or-restart "$SERVICE_NAME"
+        else
+            systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+        fi
     fi
 }
 
@@ -196,7 +204,7 @@ regenerate() {
         warn "生成配置失败。"
         return 1
     fi
-    if [[ -x "$GOST_BIN" ]] && ! "$GOST_BIN" -C "$tmp" -O yaml >/dev/null 2>&1; then
+    if config_ready && [[ -x "$GOST_BIN" ]] && ! "$GOST_BIN" -C "$tmp" -O yaml >/dev/null 2>&1; then
         rm -f -- "$tmp"
         warn "gost 拒绝了新配置。"
         return 1
@@ -373,6 +381,7 @@ show_logs() {
 
 restart_service() {
     systemctl_available || die "当前环境没有 systemd。"
+    config_ready || die "请先添加至少一个主域名和一条 IP 转发。"
     regenerate
     systemctl restart "$SERVICE_NAME"
     info "服务已重启。"
