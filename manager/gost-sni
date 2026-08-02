@@ -197,17 +197,19 @@ render_config() {
 }
 
 regenerate() {
-    local tmp
+    local tmp validation_output
     tmp="$(mktemp "$STATE_DIR/gost.yml.XXXXXX")"
     if ! render_config "$tmp"; then
         rm -f -- "$tmp"
         warn "生成配置失败。"
         return 1
     fi
-    if config_ready && [[ -x "$GOST_BIN" ]] && ! "$GOST_BIN" -C "$tmp" -O yaml >/dev/null 2>&1; then
-        rm -f -- "$tmp"
-        warn "gost 拒绝了新配置。"
-        return 1
+    if config_ready && [[ -x "$GOST_BIN" ]]; then
+        if ! validation_output="$("$GOST_BIN" -C "$tmp" -O yaml 2>&1)"; then
+            rm -f -- "$tmp"
+            warn "gost 拒绝了新配置：${validation_output:-未知错误}"
+            return 1
+        fi
     fi
     chmod 0644 "$tmp"
     mv -f -- "$tmp" "$CONFIG_FILE"
