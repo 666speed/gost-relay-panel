@@ -198,7 +198,9 @@ render_config() {
 
 regenerate() {
     local tmp validation_output
-    tmp="$(mktemp "$STATE_DIR/gost.yml.XXXXXX")"
+    # GOST infers the parser from the filename extension, so the temp file
+    # must still end in .yml during validation.
+    tmp="$(mktemp "$STATE_DIR/gost.XXXXXX.yml")"
     if ! render_config "$tmp"; then
         rm -f -- "$tmp"
         warn "生成配置失败。"
