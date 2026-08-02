@@ -1,0 +1,26 @@
+name: Manager tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shell-tests:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ShellCheck
+        run: shellcheck install.sh manager/gost-sni tests/test_manager.sh tests/test_sni_integration.sh
+      - name: Run manager tests
+        run: bash tests/test_manager.sh
+      - name: Run real GOST SNI integration tests
+        run: bash tests/test_sni_integration.sh
+      - name: Smoke-test Ubuntu installer and systemd unit
+        run: |
+          sudo bash install.sh --no-menu
+          systemctl is-active --quiet gost-sni-forward.service
+          sudo gost-sni status
