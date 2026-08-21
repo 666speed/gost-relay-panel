@@ -94,8 +94,8 @@ jobs:
           test -z "$(ss -lunH 'sport = :19445')"
           test -z "$(ss -ltn6H 'sport = :19445')"
           test "$(ps -o user= -p "$(systemctl show gost-relay.service -p MainPID --value)" | xargs)" = "nobody"
-          grep -Fq 'addr: "0.0.0.0:19445"' /etc/gost-relay-agent/gost.yml
-          if grep -Eiq 'type:[[:space:]]*udp|sniffing|HostRegexp|bypass|::' /etc/gost-relay-agent/gost.yml; then
+          sudo grep -Fq 'addr: "0.0.0.0:19445"' /etc/gost-relay-agent/gost.yml
+          if sudo grep -Eiq 'type:[[:space:]]*udp|sniffing|HostRegexp|bypass|::' /etc/gost-relay-agent/gost.yml; then
             echo 'unexpected UDP/SNI/IPv6 setting in generated config' >&2
             exit 1
           fi
