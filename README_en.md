@@ -1,46 +1,21 @@
-# GOST Fixed-IP Forwarding with a Global SNI Allowlist
+# GOST Relay Web Control Plane
 
-An Ubuntu 22.04 manager for forwarding TCP/TLS traffic to fixed Cloudflare (or other upstream) IPv4 addresses with GOST. Every forwarding rule shares one global list of base domains.
+A small self-hosted control plane for managing raw TCP/IPv4 GOST forwarding across Ubuntu and Debian nodes. The web panel is designed for a standard BT/aaPanel Nginx + PHP + MySQL stack.
 
-Adding `example.com` permits `example.com` and any depth of subdomain such as `www.example.com` or `a.b.example.com`. Missing SNI, non-TLS traffic, unrelated domains, and suffix lookalikes such as `notexample.com` are rejected before an upstream connection is selected.
+This version deliberately has no SNI allowlist or TLS sniffing. It does not create UDP or IPv6 listeners. Each rule maps one TCP listening port to one fixed IPv4 address and port.
 
-## One-line install
+## Highlights
 
-Run as root on Ubuntu 22.04:
+- Chinese web UI for server groups, node health, and forwarding rules.
+- Per-group enrollment command; every enrolled node receives that group's rules.
+- HTTPS pull model: nodes require no inbound management port and keep their last working rules if the panel is unavailable.
+- Atomic, validated GOST configuration updates with automatic rollback.
+- systemd boot startup and unlimited restart attempts for both GOST and the node agent.
+- Tested GOST `v3.2.6` release with SHA256 verification.
+- Ubuntu 20.04/22.04/24.04 and Debian 11/12/13; amd64, arm64, 386, and armv7.
 
-```bash
-sudo bash -c 'bash <(curl -fsSL https://raw.githubusercontent.com/666speed/gost-sni-forward/main/install.sh)'
-```
+See [README.md](README.md) for the complete BT/aaPanel deployment and node installation guide.
 
-Open the Chinese interactive menu at any time:
+## Security warning
 
-```bash
-gost
-```
-
-For a non-root sudo user, the manager automatically invokes `/usr/bin/sudo`.
-
-Or use the CLI directly:
-
-```bash
-gost domain add example.com example.net
-gost forward add 443 104.16.1.2 443 cloudflare-443
-gost status
-```
-
-The installer downloads the tested GOST `v3.2.6` release, verifies its SHA256 checksum, installs a hardened systemd unit, and backs up an existing `/usr/local/bin/gost` before replacing it with the menu command.
-
-## Security model
-
-- Each listening port maps to exactly one fixed IPv4 address and port; duplicate listening ports, IPv6 addresses, and hostnames are rejected.
-- A service-level whitelist and a node-level TLS/host matcher provide fail-closed SNI filtering.
-- TLS is passed through unchanged. The manager does not terminate TLS, store certificates, or perform MITM.
-- Domain configuration lives in `/etc/gost-sni-forward/domains.txt` and is automatically applied to every forwarding rule.
-
-An SNI allowlist restricts the domains that can be forwarded; it does not authenticate client devices. An attacker can still spoof an allowed SNI and consume bandwidth toward the fixed upstream. Restrict client source IPs with a firewall or use an authenticated tunnel if device-level access control is required.
-
-## Scope
-
-This project handles TCP/TLS and IPv4 targets only. UDP, QUIC/HTTP3, IPv6 targets, hostnames, and ECH-hidden hostnames are deliberately rejected/out of scope. The menu does not modify UFW automatically.
-
-See [README.md](README.md) for the full Chinese guide.
+Without SNI filtering, anyone who can reach a node's listening port can use that fixed TCP forward. Restrict source addresses with a cloud firewall/UFW, expose it only over a private network, or use authentication in the forwarded protocol.

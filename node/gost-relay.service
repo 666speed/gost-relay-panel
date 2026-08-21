@@ -1,6 +1,6 @@
 [Unit]
-Description=GOST fixed-IP forwarder with global SNI allowlist
-Documentation=https://github.com/666speed/gost-sni-forward
+Description=GOST Relay managed TCP IPv4 forwarder
+Documentation=https://github.com/666speed/gost-relay-panel
 Wants=network-online.target
 After=network-online.target
 StartLimitIntervalSec=0
@@ -9,22 +9,20 @@ StartLimitIntervalSec=0
 Type=simple
 User=nobody
 Group=nogroup
-WorkingDirectory=/etc/gost-sni-forward
-ExecStartPre=/bin/sh -c 'exec /usr/local/lib/gost-sni-forward/gost-core -C /etc/gost-sni-forward/gost.yml -O yaml >/dev/null'
-ExecStart=/usr/local/lib/gost-sni-forward/gost-core -C /etc/gost-sni-forward/gost.yml
-ExecReload=/bin/kill -HUP $MAINPID
+WorkingDirectory=/etc/gost-relay-agent
+ExecStartPre=/bin/sh -c 'exec /usr/local/lib/gost-relay-agent/gost-core -C /etc/gost-relay-agent/gost.yml -O yaml >/dev/null'
+ExecStart=/usr/local/lib/gost-relay-agent/gost-core -C /etc/gost-relay-agent/gost.yml
 Restart=always
-RestartSec=5s
+RestartSec=3s
 TimeoutStartSec=30s
 TimeoutStopSec=30s
 KillSignal=SIGTERM
 LimitNOFILE=1048576
-TasksMax=512
+TasksMax=infinity
 UMask=0027
 StandardOutput=journal
 StandardError=journal
 
-# Only low-port binding and outbound TCP/IP are needed.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true

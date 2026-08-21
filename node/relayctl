@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if (( EUID != 0 )); then
+    exec /usr/bin/sudo -- "$0" "$@"
+fi
+
+case "${1:-status}" in
+    status)
+        systemctl --no-pager --full status gost-relay.service gost-relay-agent.service
+        ;;
+    logs)
+        journalctl -u gost-relay.service -u gost-relay-agent.service -n "${2:-150}" --no-pager
+        ;;
+    follow)
+        journalctl -fu gost-relay.service -u gost-relay-agent.service
+        ;;
+    restart)
+        systemctl restart gost-relay.service gost-relay-agent.service
+        systemctl is-active --quiet gost-relay.service gost-relay-agent.service
+        printf 'GOST Relay 服务已重启。\n'
+        ;;
+    sync)
+        systemctl restart gost-relay-agent.service
+        printf '已触发立即同步。\n'
+        ;;
+    config)
+        sed -n '1,400p' /etc/gost-relay-agent/gost.yml
+        ;;
+    update)
+        bash /usr/local/lib/gost-relay-agent/node-install.sh upgrade
+        ;;
+    uninstall)
+        bash /usr/local/lib/gost-relay-agent/node-install.sh uninstall
+        ;;
+    *)
+        printf '用法：relayctl [status|logs|follow|restart|sync|config|update|uninstall]\n' >&2
+        exit 2
+        ;;
+esac

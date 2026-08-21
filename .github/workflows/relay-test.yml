@@ -1,0 +1,145 @@
+name: Relay control-plane tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  full-stack:
+    runs-on: ubuntu-22.04
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root-password
+          MYSQL_DATABASE: gost_relay_test
+          MYSQL_USER: relay
+          MYSQL_PASSWORD: relay-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot-password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: gost_relay_test
+      MYSQL_USER: relay
+      MYSQL_PASSWORD: relay-password
+      PANEL_URL: http://127.0.0.1:18080
+      ENROLL_TOKEN: ci-enrollment-token-1234567890-ABCDEFGH
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq php-cli php-mysql default-mysql-client shellcheck
+      - name: Static and unit tests
+        run: |
+          shellcheck install.sh node/node-install.sh node/relayctl tests/test_tcp_integration.sh
+          bash -n install.sh node/node-install.sh node/relayctl tests/test_tcp_integration.sh
+          python3 -m unittest -v tests/test_agent.py tests/test_project_scope.py
+          find panel tests -name '*.php' -print0 | xargs -0 -n1 php -l
+          git diff --check
+      - name: Start PHP and MySQL control plane
+        run: |
+          mysql --host=127.0.0.1 --port=3306 --user=root --password=root-password \
+            -e "CREATE DATABASE IF NOT EXISTS gost_relay_setup CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+          rm -f panel/config/config.php
+          RUNNER_TRACKING_ID="" nohup php -S 127.0.0.1:18083 -t panel/public panel/public/router.php > /tmp/gost-relay-setup.log 2>&1 &
+          echo $! > /tmp/gost-relay-setup.pid
+          for _ in {1..30}; do
+            curl -fsS http://127.0.0.1:18083/setup.php >/dev/null && break
+            sleep 1
+          done
+          SETUP_URL=http://127.0.0.1:18083 SETUP_DATABASE=gost_relay_setup \
+            python3 -m unittest -v tests/test_setup_http.py
+          kill "$(cat /tmp/gost-relay-setup.pid)"
+          php tests/setup_test_panel.php
+          RUNNER_TRACKING_ID="" nohup php -S 127.0.0.1:18080 -t panel/public panel/public/router.php > /tmp/gost-relay-php.log 2>&1 &
+          echo $! > /tmp/gost-relay-php.pid
+          for _ in {1..30}; do
+            curl -fsS http://127.0.0.1:18080/health >/dev/null && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/health
+      - name: Test panel login, enrollment, authentication, and sync
+        run: python3 -m unittest -v tests/test_panel_http.py
+      - name: Test real GOST raw TCP IPv4 forwarding
+        run: bash tests/test_tcp_integration.sh
+      - name: Smoke-test one-click node installer and systemd stability
+        run: |
+          python3 tests/tcp_backend.py 19443 systemd-backend > /tmp/systemd-backend.log 2>&1 &
+          echo $! > /tmp/systemd-backend.pid
+          sudo bash node/node-install.sh rel_nodeclient \
+            "-t ${ENROLL_TOKEN} -u ${PANEL_URL} -n systemd-node"
+
+          systemd-analyze verify /etc/systemd/system/gost-relay.service /etc/systemd/system/gost-relay-agent.service
+          systemctl is-enabled --quiet gost-relay.service gost-relay-agent.service
+          systemctl is-active --quiet gost-relay.service gost-relay-agent.service
+          test "$(systemctl show gost-relay.service -p Restart --value)" = "always"
+          test "$(systemctl show gost-relay-agent.service -p Restart --value)" = "always"
+
+          for _ in {1..30}; do
+            ss -ltnH 'sport = :19445' | grep -q . && break
+            sleep 1
+          done
+          ss -ltnH 'sport = :19445' | grep -q .
+          test -z "$(ss -lunH 'sport = :19445')"
+          test -z "$(ss -ltn6H 'sport = :19445')"
+          test "$(ps -o user= -p "$(systemctl show gost-relay.service -p MainPID --value)" | xargs)" = "nobody"
+          grep -Fq 'addr: "0.0.0.0:19445"' /etc/gost-relay-agent/gost.yml
+          if grep -Eiq 'type:[[:space:]]*udp|sniffing|HostRegexp|bypass|::' /etc/gost-relay-agent/gost.yml; then
+            echo 'unexpected UDP/SNI/IPv6 setting in generated config' >&2
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import socket
+          with socket.create_connection(("127.0.0.1", 19445), timeout=5) as client:
+              client.sendall(b"before-restart")
+              assert client.recv(1024) == b"systemd-backend:before-restart"
+          PY
+
+          old_gost_pid="$(systemctl show gost-relay.service -p MainPID --value)"
+          old_agent_pid="$(systemctl show gost-relay-agent.service -p MainPID --value)"
+          sudo kill -9 "$old_gost_pid" "$old_agent_pid"
+          for _ in {1..30}; do
+            new_gost_pid="$(systemctl show gost-relay.service -p MainPID --value)"
+            new_agent_pid="$(systemctl show gost-relay-agent.service -p MainPID --value)"
+            if systemctl is-active --quiet gost-relay.service gost-relay-agent.service && \
+               [ "$new_gost_pid" -gt 0 ] && [ "$new_gost_pid" != "$old_gost_pid" ] && \
+               [ "$new_agent_pid" -gt 0 ] && [ "$new_agent_pid" != "$old_agent_pid" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$new_gost_pid" != "$old_gost_pid"
+          test "$new_agent_pid" != "$old_agent_pid"
+
+          credential_sum="$(sudo sha256sum /etc/gost-relay-agent/agent.json | awk '{print $1}')"
+          sudo bash node/node-install.sh upgrade
+          test "$(sudo sha256sum /etc/gost-relay-agent/agent.json | awk '{print $1}')" = "$credential_sum"
+          systemctl is-active --quiet gost-relay.service gost-relay-agent.service
+
+          kill "$(cat /tmp/gost-relay-php.pid)"
+          sleep 7
+          systemctl is-active --quiet gost-relay.service gost-relay-agent.service
+          python3 - <<'PY'
+          import socket
+          with socket.create_connection(("127.0.0.1", 19445), timeout=5) as client:
+              client.sendall(b"panel-offline")
+              assert client.recv(1024) == b"systemd-backend:panel-offline"
+          PY
+
+      - name: Check Ubuntu and Debian installer compatibility
+        run: |
+          for image in ubuntu:20.04 ubuntu:22.04 ubuntu:24.04 debian:11 debian:12 debian:13; do
+            docker run --rm -v "$PWD:/src:ro" "$image" bash /src/node/node-install.sh check
+          done
